@@ -35,10 +35,15 @@ if (typeof Math.sumPrecise !== 'function') {
   Object.defineProperty(Math, 'sumPrecise', {
     configurable: true,
     writable: true,
-    value: function sumPrecise(numbers: Iterable<number>): number {
-      let total = 0;
-      for (const number of numbers) total += number;
-      return total;
+    value: function sumPrecise(numbers: ArrayLike<number> | Iterable<number> | undefined): number {
+      if (!numbers) return 0;
+      const arrayLike = numbers as ArrayLike<number>;
+      if (typeof arrayLike.length === 'number') {
+        let total = 0;
+        for (let index = 0; index < arrayLike.length; index += 1) total += arrayLike[index] ?? 0;
+        return total;
+      }
+      return Array.from(numbers as Iterable<number>).reduce((total, number) => total + number, 0);
     }
   });
 }

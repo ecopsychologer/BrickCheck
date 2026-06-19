@@ -1,11 +1,8 @@
 import './polyfills';
-import * as pdfjs from 'pdfjs-dist';
-import workerSrc from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { BrickCheckItem } from './types';
 import type { PdfTextRun } from './parser';
 import { parseOrderFromTextRuns } from './parser';
-
-pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 export interface ImportProgress {
   phase: 'loading' | 'text' | 'parsing' | 'thumbnails' | 'saving' | 'done';
@@ -33,7 +30,7 @@ export interface ThumbnailExtractionDiagnostics {
 export async function parsePdfFile(file: File, onProgress?: ImportProgressCallback) {
   onProgress?.({ phase: 'loading', current: 0, total: 1, message: 'Loading PDF' });
   const buffer = await file.arrayBuffer();
-  const pdfDocument = await pdfjs.getDocument({ data: buffer }).promise;
+  const pdfDocument = await getPdfDocument(buffer);
   const runs: PdfTextRun[] = [];
   let orderIndex = 0;
 
@@ -69,7 +66,7 @@ export async function extractThumbnailBlobs(
   diagnostics?: ThumbnailExtractionDiagnostics
 ): Promise<Map<string, Blob>> {
   const buffer = await file.arrayBuffer();
-  const pdfDocument = await pdfjs.getDocument({ data: buffer }).promise;
+  const pdfDocument = await getPdfDocument(buffer);
   const byPage = new Map<number, BrickCheckItem[]>();
   for (const item of items) {
     if (!item.thumbnailCrop) {
@@ -172,6 +169,11 @@ export function createThumbnailExtractionDiagnostics(totalItems: number): Thumbn
     blobsCreated: 0,
     itemErrors: []
   };
+}
+
+function getPdfDocument(buffer: ArrayBuffer) {
+  const documentParams = { data: buffer, disableWorker: true } as unknown as Parameters<typeof pdfjs.getDocument>[0];
+  return pdfjs.getDocument(documentParams).promise;
 }
 
 async function renderPageToCanvas(page: unknown, canvas: HTMLCanvasElement, context: CanvasRenderingContext2D, viewport: unknown) {
