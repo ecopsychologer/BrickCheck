@@ -1,8 +1,11 @@
 import './polyfills';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+import workerSrc from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import type { BrickCheckItem } from './types';
 import type { PdfTextRun } from './parser';
 import { parseOrderFromTextRuns } from './parser';
+
+pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 export interface ImportProgress {
   phase: 'loading' | 'text' | 'parsing' | 'thumbnails' | 'saving' | 'done';
