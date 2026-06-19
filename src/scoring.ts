@@ -107,6 +107,13 @@ export function scoreItem(
   return Math.round(score * 1000);
 }
 
+export function calculateValueDensity(unitPrice: number, estimatedVolume: number, riskTags: RiskTag[]): number {
+  const baseDensity = unitPrice / Math.max(estimatedVolume, 0.1);
+  if (riskTags.includes('printedDecorated')) return roundMoney(Math.max(baseDensity, 1.5));
+  if (riskTags.includes('specialtyVariant')) return roundMoney(Math.max(baseDensity, 1));
+  return roundMoney(baseDensity);
+}
+
 export function assignRouteGroup(item: Pick<BrickCheckItem, 'riskTags' | 'costDensity' | 'quantityExpected' | 'visualBulk'>, mode: RouteMode): RouteGroup {
   const treasureRisk = item.riskTags.some((tag) =>
     ['quantityOne', 'tiny', 'highUnitPrice', 'minifig', 'printedDecorated', 'animal', 'accessory', 'transparent', 'specialtyVariant'].includes(tag)
@@ -131,8 +138,8 @@ export function enrichParsedItems<T extends Omit<BrickCheckItem, 'estimatedVolum
     const { estimatedVolume, volumeConfidence } = estimateVolume(item.name);
     const unitPrice = roundMoney(item.unitPrice);
     const visualBulk = roundMoney(estimatedVolume * item.quantityExpected);
-    const costDensity = roundMoney(unitPrice / Math.max(estimatedVolume, 0.1));
     const riskTags = riskTagsForItem({ name: item.name, quantityExpected: item.quantityExpected, unitPrice, estimatedVolume });
+    const costDensity = calculateValueDensity(unitPrice, estimatedVolume, riskTags);
     return {
       ...item,
       unitPrice,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { BrickCheckItem, BrickCheckOrder, ChecklistSettings, ChecklistSortKey, ChecklistStatusFilter, PartFamily, RouteGroup, RouteMode, ScoringSettings } from './types';
+import type { BrickCheckItem, BrickCheckOrder, ChecklistSettings, ChecklistSortKey, ChecklistStatusFilter, PartFamily, RouteGroup, RouteMode, ScoringSettings, ThumbnailSize } from './types';
 import { createThumbnailExtractionDiagnostics, parsePdfFile, extractThumbnailBlobs, type ImportProgress } from './pdf';
 import { countOrderThumbnails, deleteOrder, getThumbnailUrl, listOrders, replaceOrderThumbnails, requestPersistentStorage, saveOrder, updateItem, updateOrder } from './db';
 import { formatMoney } from './lib/money';
@@ -286,8 +286,7 @@ export default function App() {
     setSettings(nextSettings);
     localStorage.setItem('brickcheck.scoring', JSON.stringify(nextSettings));
     if (!selectedOrder) return;
-    const routeMode = normalizeChecklistSettings(selectedOrder.checklistSettings).routeMode;
-    const next = { ...selectedOrder, items: rescoreItems(selectedOrder.items, routeMode, nextSettings) };
+    const next = { ...selectedOrder, items: rescoreItems(selectedOrder.items, 'hybrid', nextSettings) };
     await persistOrder(next);
   }
 
@@ -296,7 +295,7 @@ export default function App() {
     const currentSettings = normalizeChecklistSettings(selectedOrder.checklistSettings);
     const nextSettings = { ...currentSettings, ...patch };
     const routeChanged = patch.routeMode && patch.routeMode !== currentSettings.routeMode;
-    const nextItems = routeChanged ? rescoreItems(selectedOrder.items, nextSettings.routeMode, settings) : selectedOrder.items;
+    const nextItems = routeChanged ? rescoreItems(selectedOrder.items, 'hybrid', settings) : selectedOrder.items;
     await persistOrder({ ...selectedOrder, checklistSettings: nextSettings, items: nextItems });
   }
 
@@ -614,20 +613,25 @@ function ChecklistScreen({
   const checklistSettings = normalizeChecklistSettings(order.checklistSettings);
   const { active, done } = useMemo(() => splitChecklistItems(order.items, checklistSettings), [order.items, checklistSettings]);
   const families = useMemo(() => uniqueValues(order.items.map((item) => item.partFamily)), [order.items]);
+  const subOrderIds = useMemo(
+    () => [...new Set(order.items.map((item) => item.subOrderId))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    [order.items]
+  );
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-black">Checklist</h1>
-        <Segmented<RouteMode> value={checklistSettings.routeMode} options={[['hybrid', 'Hybrid'], ['treasure', 'Treasure'], ['bulk', 'Bulk']]} onChange={(routeMode) => onSettingsChange({ routeMode })} />
+        <Segmented<RouteMode> value={checklistSettings.routeMode} options={[['hybrid', 'Hybrid'], ['treasure', 'Treasure'], ['bulk', 'Bulk']]} onChange={(routeMode) => onSettingsChange({ routeMode, sortKey: 'route' })} />
       </div>
 
-      <ChecklistControls settings={checklistSettings} families={families} onChange={onSettingsChange} />
+      <ChecklistControls settings={checklistSettings} families={families} subOrderIds={subOrderIds} onChange={onSettingsChange} />
 
       <div className="space-y-3">
         {active.map((item) => (
           <ChecklistItem
             key={item.id}
             item={item}
+            thumbnailSize={checklistSettings.thumbnailSize}
             onIncrement={() => onIncrement(item)}
             onDecrement={() => onDecrement(item)}
             onFoundAll={() => onFoundAll(item)}
@@ -646,6 +650,7 @@ function ChecklistScreen({
             <ChecklistItem
               key={item.id}
               item={item}
+              thumbnailSize={checklistSettings.thumbnailSize}
               onIncrement={() => onIncrement(item)}
               onDecrement={() => onDecrement(item)}
               onFoundAll={() => onFoundAll(item)}
@@ -663,10 +668,12 @@ function ChecklistScreen({
 function ChecklistControls({
   settings,
   families,
+  subOrderIds,
   onChange
 }: {
   settings: ChecklistSettings;
   families: PartFamily[];
+  subOrderIds: string[];
   onChange: (settings: Partial<ChecklistSettings>) => void;
 }) {
   return (
@@ -690,6 +697,18 @@ function ChecklistControls({
         />
       </label>
       <div className="grid grid-cols-2 gap-2">
+        <SelectControl<string>
+          label="Sub-order"
+          value={settings.subOrderFilter}
+          options={[['all', 'All sub-orders'], ...subOrderIds.map((subOrderId): [string, string] => [subOrderId, subOrderId])]}
+          onChange={(subOrderFilter) => onChange({ subOrderFilter })}
+        />
+        <SelectControl<ThumbnailSize>
+          label="Pictures"
+          value={settings.thumbnailSize}
+          options={[['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']]}
+          onChange={(thumbnailSize) => onChange({ thumbnailSize })}
+        />
         <SelectControl<ChecklistStatusFilter>
           label="State"
           value={settings.statusFilter}
@@ -743,6 +762,7 @@ function ChecklistControls({
 
 function ChecklistItem({
   item,
+  thumbnailSize,
   onIncrement,
   onDecrement,
   onFoundAll,
@@ -751,6 +771,7 @@ function ChecklistItem({
   onEdit
 }: {
   item: BrickCheckItem;
+  thumbnailSize: ThumbnailSize;
   onIncrement: () => void;
   onDecrement: () => void;
   onFoundAll: () => void;
@@ -759,10 +780,15 @@ function ChecklistItem({
   onEdit: () => void;
 }) {
   const canIncrement = item.quantityFound < item.quantityExpected;
+  const gridClass = thumbnailSize === 'small'
+    ? 'grid-cols-[56px_1fr]'
+    : thumbnailSize === 'large'
+      ? 'grid-cols-[96px_1fr]'
+      : 'grid-cols-[72px_1fr]';
   return (
     <article className="rounded-lg border border-slate-300 bg-white p-3 shadow-sm">
-      <div className="grid grid-cols-[72px_1fr] gap-3">
-        <Thumbnail item={item} />
+      <div className={`grid ${gridClass} gap-3`}>
+        <Thumbnail item={item} size={thumbnailSize} />
         <div className="min-w-0">
           <div className="flex items-start justify-between gap-2">
             <button className="min-w-0 text-left" onClick={onIncrement} disabled={!canIncrement}>
@@ -856,11 +882,12 @@ function ItemModal({ item, onClose, onSave }: { item: BrickCheckItem; onClose: (
   );
 }
 
-function SettingsScreen({ settings, onApply }: { settings: ScoringSettings; onApply: (settings: ScoringSettings) => void }) {
+function SettingsScreen({ settings, onApply }: { settings: ScoringSettings; onApply: (settings: ScoringSettings) => Promise<void> }) {
   const [draft, setDraft] = useState(settings);
+  const [applyState, setApplyState] = useState<'idle' | 'applying' | 'applied' | 'error'>('idle');
   const sliders: Array<[keyof ScoringSettings, string]> = [
     ['lineTotalWeight', 'Line total'],
-    ['costDensityWeight', 'Cost density'],
+    ['costDensityWeight', 'Value density'],
     ['visualBulkWeight', 'Visual bulk'],
     ['quantityWeight', 'Quantity'],
     ['riskWeight', 'Risk'],
@@ -870,7 +897,20 @@ function SettingsScreen({ settings, onApply }: { settings: ScoringSettings; onAp
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-black">Scoring</h1>
-        <Button onClick={() => onApply(draft)}>Apply</Button>
+        <Button
+          disabled={applyState === 'applying'}
+          onClick={async () => {
+            setApplyState('applying');
+            try {
+              await onApply(draft);
+              setApplyState('applied');
+            } catch {
+              setApplyState('error');
+            }
+          }}
+        >
+          {applyState === 'applying' ? 'Applying...' : applyState === 'applied' ? 'Applied' : 'Apply'}
+        </Button>
       </div>
       <div className="space-y-3 rounded-lg border border-slate-300 bg-white p-4">
         {sliders.map(([key, label]) => (
@@ -886,15 +926,20 @@ function SettingsScreen({ settings, onApply }: { settings: ScoringSettings; onAp
               max="0.6"
               step="0.01"
               value={draft[key]}
-              onChange={(event) => setDraft({ ...draft, [key]: Number(event.currentTarget.value) })}
+              onChange={(event) => {
+                setDraft({ ...draft, [key]: Number(event.currentTarget.value) });
+                setApplyState('idle');
+              }}
             />
           </label>
         ))}
-        <Button variant="secondary" onClick={() => setDraft(defaultScoringSettings)}>Defaults</Button>
+        <Button variant="secondary" onClick={() => { setDraft(defaultScoringSettings); setApplyState('idle'); }}>Defaults</Button>
       </div>
+      {applyState === 'applied' && <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-800" role="status">Applied to this order.</div>}
+      {applyState === 'error' && <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-800" role="alert">Could not save scoring settings.</div>}
       <div className="rounded-lg border border-slate-300 bg-white p-4 text-sm leading-6 text-slate-700">
         <p><strong>Line total</strong> favors rows with the most money at stake.</p>
-        <p><strong>Cost density</strong> favors tiny or compact parts that are expensive for their size.</p>
+        <p><strong>Value density</strong> is unit price divided by estimated part volume. Printed and decorated parts receive a high minimum value density so large printed slopes and similar pieces still rank as special.</p>
         <p><strong>Visual bulk</strong> favors parts that should be easy to sweep up by volume.</p>
         <p><strong>Quantity</strong> favors rows with many copies to count.</p>
         <p><strong>Risk</strong> boosts single, tiny, printed/decorated, transparent, minifig, accessory, animal, plant, high-unit-price, and specialty variant pieces.</p>
@@ -977,23 +1022,28 @@ function SubOrderTable({ order }: { order: BrickCheckOrder }) {
   );
 }
 
-function Thumbnail({ item }: { item: BrickCheckItem }) {
+function Thumbnail({ item, size }: { item: BrickCheckItem; size: ThumbnailSize }) {
   const [url, setUrl] = useState<string>();
   useEffect(() => {
     let active = true;
+    let objectUrl: string | undefined;
     getThumbnailUrl(item.thumbnailBlobId).then((nextUrl) => {
+      objectUrl = nextUrl;
       if (active) setUrl(nextUrl);
+      else if (nextUrl) URL.revokeObjectURL(nextUrl);
     });
     return () => {
       active = false;
-      if (url) URL.revokeObjectURL(url);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [item.thumbnailBlobId]);
 
+  const sizeClass = size === 'small' ? 'h-14 w-14' : size === 'large' ? 'h-24 w-24' : 'h-18 w-18';
+
   if (!url) {
-    return <div className="grid h-18 w-18 place-items-center rounded-md bg-slate-200 text-xs font-black text-slate-500">SKU</div>;
+    return <div className={`grid ${sizeClass} place-items-center rounded-md bg-slate-200 text-xs font-black text-slate-500`}>SKU</div>;
   }
-  return <img className="h-18 w-18 rounded-md border border-slate-200 object-cover" src={url} alt="" />;
+  return <img className={`${sizeClass} rounded-md border border-slate-200 bg-white object-contain`} src={url} alt="" />;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

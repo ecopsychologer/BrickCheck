@@ -35,13 +35,17 @@ export type ChecklistStatusFilter = 'all' | 'open' | 'unchecked' | 'partial' | '
 
 export type ChecklistSortKey = 'route' | 'priority' | 'quantity' | 'lineTotal' | 'unitPrice' | 'costDensity' | 'visualBulk' | 'family' | 'name';
 
+export type ThumbnailSize = 'small' | 'medium' | 'large';
+
 export interface ChecklistSettings {
   moveFoundToDoneList: boolean;
   statusFilter: ChecklistStatusFilter;
   familyFilter: PartFamily | 'all';
   routeFilter: RouteGroup | 'all';
+  subOrderFilter: string;
   sortKey: ChecklistSortKey;
   routeMode: RouteMode;
+  thumbnailSize: ThumbnailSize;
   search: string;
 }
 

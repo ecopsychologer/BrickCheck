@@ -48,9 +48,21 @@ describe('scoring', () => {
     ]);
 
     const printed = items.find((item) => item.id === 'printed')!;
+    const plain = items.find((item) => item.id === 'plain')!;
     expect(printed.riskTags).toContain('printedDecorated');
     expect(printed.riskTags).toContain('specialtyVariant');
     expect(printed.routeGroup).toBe('treasure');
+    expect(printed.costDensity).toBeGreaterThanOrEqual(1.5);
+    expect(printed.costDensity).toBeGreaterThan(plain.costDensity);
+  });
+
+  it('gives a large printed slope high value density', () => {
+    const [printedSlope] = enrichParsedItems([
+      { ...base, id: 'printed-slope', sku: '1', name: 'ROOF TILE 2X4, NO. 17', quantityExpected: 2, lineTotalPrice: 1, unitPrice: 0.5 }
+    ]);
+
+    expect(printedSlope.riskTags).toContain('printedDecorated');
+    expect(printedSlope.costDensity).toBeGreaterThanOrEqual(1.5);
   });
 
   it('keeps high-quantity masonry/profile bricks in bulk unless another risk applies', () => {

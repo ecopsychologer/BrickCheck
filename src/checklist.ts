@@ -4,16 +4,20 @@ import type {
   ChecklistSortKey,
   ChecklistStatusFilter,
   PartFamily,
-  RouteGroup
+  RouteGroup,
+  RouteMode
 } from './types';
+import { orderChecklistItems } from './ordering';
 
 export const defaultChecklistSettings: ChecklistSettings = {
   moveFoundToDoneList: true,
   statusFilter: 'open',
   familyFilter: 'all',
   routeFilter: 'all',
+  subOrderFilter: 'all',
   sortKey: 'route',
   routeMode: 'hybrid',
+  thumbnailSize: 'medium',
   search: ''
 };
 
@@ -39,6 +43,7 @@ export function filterChecklistItems(items: BrickCheckItem[], settings: Checklis
   const query = normalizeSearch(settings.search);
   return items.filter((item) => {
     if (!matchesStatus(item, settings.statusFilter)) return false;
+    if (settings.subOrderFilter !== 'all' && item.subOrderId !== settings.subOrderFilter) return false;
     if (settings.familyFilter !== 'all' && item.partFamily !== settings.familyFilter) return false;
     if (settings.routeFilter !== 'all' && item.routeGroup !== settings.routeFilter) return false;
     if (query && !getSearchText(item).includes(query)) return false;
@@ -73,13 +78,26 @@ export function sortChecklistItems(items: BrickCheckItem[], sortKey: ChecklistSo
 }
 
 export function splitChecklistItems(items: BrickCheckItem[], settings: ChecklistSettings) {
-  const filtered = filterChecklistItems(items, settings);
-  const sorted = sortChecklistItems(filtered, settings.sortKey);
-  if (!settings.moveFoundToDoneList) return { active: sorted, done: [] };
+  const filteredWithoutStatus = filterChecklistItems(items, { ...settings, statusFilter: 'all' });
+  const sorted = sortForSettings(filteredWithoutStatus, settings.sortKey, settings.routeMode);
+  if (!settings.moveFoundToDoneList) {
+    return {
+      active: sorted.filter((item) => matchesStatus(item, settings.statusFilter)),
+      done: []
+    };
+  }
+
+  const showDone = settings.statusFilter === 'open' || settings.statusFilter === 'all' || settings.statusFilter === 'found';
   return {
-    active: sorted.filter((item) => item.status !== 'found'),
-    done: sorted.filter((item) => item.status === 'found')
+    active: settings.statusFilter === 'found'
+      ? []
+      : sorted.filter((item) => item.status !== 'found' && matchesStatus(item, settings.statusFilter)),
+    done: showDone ? sorted.filter((item) => item.status === 'found') : []
   };
+}
+
+function sortForSettings(items: BrickCheckItem[], sortKey: ChecklistSortKey, routeMode: RouteMode): BrickCheckItem[] {
+  return sortKey === 'route' ? orderChecklistItems(items, routeMode) : sortChecklistItems(items, sortKey);
 }
 
 function matchesStatus(item: BrickCheckItem, statusFilter: ChecklistStatusFilter): boolean {

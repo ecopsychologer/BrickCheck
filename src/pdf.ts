@@ -337,7 +337,7 @@ function normalizeThumbnailCanvas(canvas: HTMLCanvasElement): HTMLCanvasElement 
   const subjectHeight = bounds.maxY - bounds.minY + 1;
   if (subjectWidth < 8 || subjectHeight < 8) return canvas;
 
-  const sourcePad = Math.ceil(Math.max(subjectWidth, subjectHeight) * 0.08);
+  const sourcePad = Math.ceil(Math.max(subjectWidth, subjectHeight) * 0.07);
   const sourceX = Math.floor(clamp(bounds.minX - sourcePad, 0, canvas.width - 1));
   const sourceY = Math.floor(clamp(bounds.minY - sourcePad, 0, canvas.height - 1));
   const sourceRight = Math.ceil(clamp(bounds.maxX + sourcePad, sourceX + 1, canvas.width));
@@ -355,7 +355,7 @@ function normalizeThumbnailCanvas(canvas: HTMLCanvasElement): HTMLCanvasElement 
   context.fillStyle = '#ffffff';
   context.fillRect(0, 0, outputSize, outputSize);
 
-  const targetMax = outputSize * 0.9;
+  const targetMax = outputSize * 0.98;
   const scale = Math.min(targetMax / sourceWidth, targetMax / sourceHeight);
   const targetWidth = sourceWidth * scale;
   const targetHeight = sourceHeight * scale;
@@ -374,6 +374,9 @@ function findThumbnailSubjectBounds(canvas: HTMLCanvasElement) {
 
   try {
     const image = context.getImageData(0, 0, canvas.width, canvas.height);
+    const borderRows = findLikelyFrameLines(image.data, canvas.width, canvas.height, 'row');
+    const borderColumns = findLikelyFrameLines(image.data, canvas.width, canvas.height, 'column');
+    const hasDetectedFrame = borderRows.length >= 2 && borderColumns.length >= 2;
     let minX = canvas.width;
     let minY = canvas.height;
     let maxX = -1;
@@ -382,6 +385,7 @@ function findThumbnailSubjectBounds(canvas: HTMLCanvasElement) {
     for (let y = 0; y < canvas.height; y += 1) {
       for (let x = 0; x < canvas.width; x += 1) {
         const index = (y * canvas.width + x) * 4;
+        if (hasDetectedFrame && (isNearLine(y, borderRows) || isNearLine(x, borderColumns))) continue;
         if (!isThumbnailSubjectPixel(image.data[index], image.data[index + 1], image.data[index + 2], image.data[index + 3])) continue;
         minX = Math.min(minX, x);
         minY = Math.min(minY, y);
@@ -395,6 +399,42 @@ function findThumbnailSubjectBounds(canvas: HTMLCanvasElement) {
   } catch {
     return undefined;
   }
+}
+
+function findLikelyFrameLines(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  direction: 'row' | 'column'
+): number[] {
+  const lineCount = direction === 'row' ? height : width;
+  const lineLength = direction === 'row' ? width : height;
+  const minimumPixels = lineLength * 0.28;
+  const lines: number[] = [];
+
+  for (let line = 0; line < lineCount; line += 1) {
+    let neutralPixels = 0;
+    for (let offset = 0; offset < lineLength; offset += 1) {
+      const x = direction === 'row' ? offset : line;
+      const y = direction === 'row' ? line : offset;
+      const index = (y * width + x) * 4;
+      if (isNeutralFramePixel(data[index], data[index + 1], data[index + 2], data[index + 3])) neutralPixels += 1;
+    }
+    if (neutralPixels >= minimumPixels) lines.push(line);
+  }
+
+  return lines;
+}
+
+function isNearLine(value: number, lines: number[]): boolean {
+  return lines.some((line) => Math.abs(line - value) <= 1);
+}
+
+function isNeutralFramePixel(red: number, green: number, blue: number, alpha: number): boolean {
+  if (alpha < 16) return false;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  return max >= 120 && max <= 245 && max - min <= 10;
 }
 
 function isThumbnailSubjectPixel(red: number, green: number, blue: number, alpha: number): boolean {

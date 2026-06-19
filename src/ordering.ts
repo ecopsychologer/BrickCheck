@@ -12,11 +12,19 @@ export function orderChecklistItems(items: BrickCheckItem[], mode: RouteMode) {
       return routeRank[a.routeGroup] - routeRank[b.routeGroup];
     }
     if (mode === 'bulk') {
-      return b.visualBulk - a.visualBulk || b.quantityExpected - a.quantityExpected || b.priorityScore - a.priorityScore;
+      return bulkRank(a) - bulkRank(b) || b.visualBulk - a.visualBulk || b.quantityExpected - a.quantityExpected || b.priorityScore - a.priorityScore;
     }
     if (mode === 'treasure') {
-      return b.priorityScore - a.priorityScore || b.costDensity - a.costDensity;
+      return treasureRank(a) - treasureRank(b) || b.priorityScore - a.priorityScore || b.costDensity - a.costDensity;
     }
     return b.priorityScore - a.priorityScore || a.partFamily.localeCompare(b.partFamily) || a.name.localeCompare(b.name);
   });
+}
+
+function treasureRank(item: BrickCheckItem): number {
+  return item.routeGroup === 'treasure' ? 0 : 1;
+}
+
+function bulkRank(item: BrickCheckItem): number {
+  return item.routeGroup === 'bulk' ? 0 : 1;
 }
