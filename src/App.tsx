@@ -226,7 +226,7 @@ export default function App() {
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
           <button className="text-left" onClick={() => setScreen('home')}>
             <div className="text-2xl font-black tracking-normal">BrickCheck</div>
-            <div className="text-xs font-semibold uppercase tracking-normal text-slate-800">Pick a Brick Order Checking Helper</div>
+            <div className="text-xs font-semibold uppercase tracking-normal text-slate-800">Pick a Brick order checking app</div>
           </button>
           <nav className="flex gap-2">
             {selectedOrder && (
@@ -300,7 +300,7 @@ function HomeScreen({
   busy: boolean;
   message: string;
   importProgress: ImportProgress | null;
-  onImport: (file: File) => void;
+  onImport: (file: File) => Promise<void>;
   onOpen: (order: BrickCheckOrder) => void;
 }) {
   return (
@@ -314,9 +314,14 @@ function HomeScreen({
             accept="application/pdf"
             disabled={busy}
             onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
-              if (file) onImport(file);
-              event.currentTarget.value = '';
+              const input = event.currentTarget;
+              const file = input.files?.[0];
+              if (!file) return;
+              void onImport(file).finally(() => {
+                window.setTimeout(() => {
+                  input.value = '';
+                }, 250);
+              });
             }}
           />
         </label>

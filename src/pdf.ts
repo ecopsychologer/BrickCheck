@@ -32,7 +32,7 @@ export interface ThumbnailExtractionDiagnostics {
 
 export async function parsePdfFile(file: File, onProgress?: ImportProgressCallback) {
   onProgress?.({ phase: 'loading', current: 0, total: 1, message: 'Loading PDF' });
-  const buffer = await file.arrayBuffer();
+  const buffer = await readFileAsArrayBuffer(file);
   const pdfDocument = await getPdfDocument(buffer);
   const runs: PdfTextRun[] = [];
   let orderIndex = 0;
@@ -68,7 +68,7 @@ export async function extractThumbnailBlobs(
   onProgress?: ImportProgressCallback,
   diagnostics?: ThumbnailExtractionDiagnostics
 ): Promise<Map<string, Blob>> {
-  const buffer = await file.arrayBuffer();
+  const buffer = await readFileAsArrayBuffer(file);
   const pdfDocument = await getPdfDocument(buffer);
   const byPage = new Map<number, BrickCheckItem[]>();
   for (const item of items) {
@@ -174,9 +174,37 @@ export function createThumbnailExtractionDiagnostics(totalItems: number): Thumbn
   };
 }
 
-function getPdfDocument(buffer: ArrayBuffer) {
+let pdfWorkerReady: Promise<void> | undefined;
+
+async function getPdfDocument(buffer: ArrayBuffer) {
+  await ensureMainThreadPdfWorker();
   const documentParams = { data: buffer, disableWorker: true } as unknown as Parameters<typeof pdfjs.getDocument>[0];
   return pdfjs.getDocument(documentParams).promise;
+}
+
+function ensureMainThreadPdfWorker(): Promise<void> {
+  const current = globalThis as typeof globalThis & { pdfjsWorker?: unknown };
+  if (current.pdfjsWorker) return Promise.resolve();
+  pdfWorkerReady ??= import('pdfjs-dist/legacy/build/pdf.worker.mjs').then((workerModule) => {
+    current.pdfjsWorker = workerModule;
+  });
+  return pdfWorkerReady;
+}
+
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  if (typeof file.arrayBuffer === 'function') return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read PDF file.'));
+    reader.onload = () => {
+      if (reader.result instanceof ArrayBuffer) {
+        resolve(reader.result);
+      } else {
+        reject(new Error('Could not read PDF file.'));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 async function renderPageToCanvas(page: unknown, canvas: HTMLCanvasElement, context: CanvasRenderingContext2D, viewport: unknown) {

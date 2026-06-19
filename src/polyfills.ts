@@ -9,6 +9,43 @@ declare global {
   }
 }
 
+if (typeof Array.prototype.at !== 'function') {
+  Object.defineProperty(Array.prototype, 'at', {
+    configurable: true,
+    writable: true,
+    value: function at<T>(this: ArrayLike<T>, index: number): T | undefined {
+      const length = this.length >>> 0;
+      const relativeIndex = Math.trunc(index) || 0;
+      const actualIndex = relativeIndex < 0 ? length + relativeIndex : relativeIndex;
+      return actualIndex >= 0 && actualIndex < length ? this[actualIndex] : undefined;
+    }
+  });
+}
+
+if (typeof Array.prototype.findLast !== 'function') {
+  Object.defineProperty(Array.prototype, 'findLast', {
+    configurable: true,
+    writable: true,
+    value: function findLast<T>(this: ArrayLike<T>, predicate: (value: T, index: number, object: ArrayLike<T>) => unknown, thisArg?: unknown): T | undefined {
+      for (let index = this.length - 1; index >= 0; index -= 1) {
+        const value = this[index];
+        if (predicate.call(thisArg, value, index, this)) return value;
+      }
+      return undefined;
+    }
+  });
+}
+
+for (const TypedArrayConstructor of [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array]) {
+  if (typeof TypedArrayConstructor.prototype.at !== 'function') {
+    Object.defineProperty(TypedArrayConstructor.prototype, 'at', {
+      configurable: true,
+      writable: true,
+      value: Array.prototype.at
+    });
+  }
+}
+
 if (typeof Map.prototype.getOrInsert !== 'function') {
   Object.defineProperty(Map.prototype, 'getOrInsert', {
     configurable: true,
@@ -60,6 +97,25 @@ if (typeof Promise.withResolvers !== 'function') {
         reject = promiseReject;
       });
       return { promise, resolve, reject };
+    }
+  });
+}
+
+if (typeof globalThis.structuredClone !== 'function') {
+  Object.defineProperty(globalThis, 'structuredClone', {
+    configurable: true,
+    writable: true,
+    value: function structuredCloneFallback<T>(value: T): T {
+      if (value instanceof ArrayBuffer) return value.slice(0) as T;
+      if (ArrayBuffer.isView(value)) {
+        if (value instanceof DataView) return new DataView(value.buffer.slice(0), value.byteOffset, value.byteLength) as T;
+        return new (value.constructor as { new (arrayLike: ArrayLike<number>): T })(value as unknown as ArrayLike<number>);
+      }
+      if (value instanceof Map) return new Map(value) as T;
+      if (value instanceof Set) return new Set(value) as T;
+      if (Array.isArray(value)) return value.map((item) => structuredCloneFallback(item)) as T;
+      if (value && typeof value === 'object') return { ...(value as Record<string, unknown>) } as T;
+      return value;
     }
   });
 }
