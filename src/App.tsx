@@ -15,6 +15,8 @@ interface DraftImport {
   thumbnails: Map<string, Blob>;
 }
 
+const IMPORT_DIAGNOSTIC_KEY = 'brickcheck.lastImportDiagnostic';
+
 const statusLabels: Record<BrickCheckItem['status'], string> = {
   unchecked: 'Unchecked',
   found: 'Found',
@@ -32,6 +34,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const [importDiagnostic, setImportDiagnostic] = useState(() => loadImportDiagnostic());
   const [photoDiagnostic, setPhotoDiagnostic] = useState('');
   const [editingItem, setEditingItem] = useState<BrickCheckItem | null>(null);
 
@@ -51,13 +54,69 @@ export default function App() {
   async function handleImport(file: File) {
     setBusy(true);
     setMessage('Importing PDF...');
-    setImportProgress({ phase: 'loading', current: 0, total: 1, message: 'Starting import' });
+    let importFailed = false;
+    let lastProgress: ImportProgress = { phase: 'loading', current: 0, total: 1, message: 'Starting import' };
+    let lastRecordedProgress: ImportProgress | undefined;
+    const trackProgress = (progress: ImportProgress) => {
+      lastProgress = progress;
+      setImportProgress(progress);
+      if (
+        !lastRecordedProgress
+        || progress.phase !== lastRecordedProgress.phase
+        || progress.current === 0
+        || progress.current === progress.total
+        || progress.current % 10 === 0
+      ) {
+        persistImportDiagnostic(setImportDiagnostic, createImportDiagnostic({
+          file,
+          outcome: 'running',
+          progress
+        }));
+        lastRecordedProgress = progress;
+      }
+    };
+    trackProgress(lastProgress);
+    persistImportDiagnostic(setImportDiagnostic, createImportDiagnostic({
+      file,
+      outcome: 'started',
+      progress: lastProgress
+    }));
+    const captureUnhandledError = (error: unknown, outcome: string) => {
+      persistImportDiagnostic(setImportDiagnostic, createImportDiagnostic({
+        file,
+        outcome,
+        progress: lastProgress,
+        error
+      }));
+    };
+    const onWindowError = (event: ErrorEvent) => captureUnhandledError(
+      event.error ?? new Error(`${event.message} at ${event.filename}:${event.lineno}:${event.colno}`),
+      'uncaught-window-error'
+    );
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => captureUnhandledError(event.reason, 'unhandled-rejection');
+    window.addEventListener('error', onWindowError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
     try {
-      const result = await parsePdfFile(file, setImportProgress);
+      const result = await parsePdfFile(file, trackProgress);
+      persistImportDiagnostic(setImportDiagnostic, createImportDiagnostic({
+        file,
+        outcome: 'parsed',
+        progress: lastProgress,
+        extra: {
+          parsedItems: result.order.items.length,
+          subOrders: result.order.subOrders.length,
+          parseWarnings: result.order.parseWarnings.map((warning) => ({
+            severity: warning.severity,
+            message: warning.message,
+            subOrderId: warning.subOrderId
+          }))
+        }
+      }));
       let thumbnails = new Map<string, Blob>();
+      let thumbnailDiagnostics = createThumbnailExtractionDiagnostics(result.order.items.length);
       try {
-        const thumbnailDiagnostics = createThumbnailExtractionDiagnostics(result.order.items.length);
-        thumbnails = await extractThumbnailBlobs(file, result.order.items, setImportProgress, thumbnailDiagnostics);
+        thumbnailDiagnostics = createThumbnailExtractionDiagnostics(result.order.items.length);
+        thumbnails = await extractThumbnailBlobs(file, result.order.items, trackProgress, thumbnailDiagnostics);
         if (thumbnails.size === 0 && result.order.items.length > 0) {
           result.order.parseWarnings.push({
             id: `warning_${Date.now()}`,
@@ -65,22 +124,57 @@ export default function App() {
             message: `Thumbnail extraction produced 0 images. ${thumbnailDiagnostics.pageErrors.slice(0, 2).join(' ')}`
           });
         }
-      } catch {
+      } catch (thumbnailError) {
         result.order.parseWarnings.push({
           id: `warning_${Date.now()}`,
           severity: 'warning',
           message: 'Thumbnail extraction failed for this PDF. Checklist still works.'
         });
+        persistImportDiagnostic(setImportDiagnostic, createImportDiagnostic({
+          file,
+          outcome: 'thumbnail-warning',
+          progress: lastProgress,
+          error: thumbnailError,
+          extra: { thumbnailDiagnostics }
+        }));
       }
-      setImportProgress({ phase: 'done', current: 1, total: 1, message: 'Import ready to review' });
+      trackProgress({ phase: 'done', current: 1, total: 1, message: 'Import ready to review' });
+      persistImportDiagnostic(setImportDiagnostic, createImportDiagnostic({
+        file,
+        outcome: 'success',
+        progress: lastProgress,
+        extra: {
+          parsedItems: result.order.items.length,
+          subOrders: result.order.subOrders.length,
+          thumbnailsGenerated: thumbnails.size,
+          thumbnailDiagnostics,
+          parseWarnings: result.order.parseWarnings.map((warning) => ({
+            severity: warning.severity,
+            message: warning.message,
+            subOrderId: warning.subOrderId
+          }))
+        }
+      }));
       setDraftImport({ order: result.order, thumbnails });
       setScreen('review');
       setMessage('');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Import failed.');
+      importFailed = true;
+      const diagnostic = createImportDiagnostic({
+        file,
+        outcome: 'failure',
+        progress: lastProgress,
+        error
+      });
+      persistImportDiagnostic(setImportDiagnostic, diagnostic);
+      setMessage(`${error instanceof Error ? error.message : 'Import failed.'} Import diagnostics are shown below.`);
     } finally {
+      window.removeEventListener('error', onWindowError);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
       setBusy(false);
-      setTimeout(() => setImportProgress(null), 700);
+      if (!importFailed) {
+        setTimeout(() => setImportProgress(null), 700);
+      }
     }
   }
 
@@ -245,7 +339,7 @@ export default function App() {
 
       <main className="mx-auto max-w-5xl px-4 py-4 pb-28">
         {screen === 'home' && (
-          <HomeScreen orders={orders} busy={busy} message={message} importProgress={importProgress} onImport={handleImport} onOpen={(order) => { setSelectedOrder(order); setScreen('dashboard'); }} />
+          <HomeScreen orders={orders} busy={busy} message={message} importProgress={importProgress} importDiagnostic={importDiagnostic} onClearImportDiagnostic={() => clearImportDiagnostic(setImportDiagnostic)} onImport={handleImport} onOpen={(order) => { setSelectedOrder(order); setScreen('dashboard'); }} />
         )}
 
         {screen === 'review' && draftImport && <ReviewScreen draft={draftImport.order} busy={busy} onSave={commitDraft} onCancel={() => { setDraftImport(null); setScreen('home'); }} />}
@@ -293,6 +387,8 @@ function HomeScreen({
   busy,
   message,
   importProgress,
+  importDiagnostic,
+  onClearImportDiagnostic,
   onImport,
   onOpen
 }: {
@@ -300,6 +396,8 @@ function HomeScreen({
   busy: boolean;
   message: string;
   importProgress: ImportProgress | null;
+  importDiagnostic: string;
+  onClearImportDiagnostic: () => void;
   onImport: (file: File) => Promise<void>;
   onOpen: (order: BrickCheckOrder) => void;
 }) {
@@ -328,6 +426,14 @@ function HomeScreen({
         {message && <p className="mt-3 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white">{message}</p>}
         {importProgress && <ImportProgressBar progress={importProgress} />}
       </div>
+
+      {importDiagnostic && (
+        <DiagnosticPanel
+          diagnostic={importDiagnostic}
+          title="Import diagnostics"
+          onClear={onClearImportDiagnostic}
+        />
+      )}
 
       <div className="space-y-3">
         <h1 className="text-xl font-black">Orders</h1>
@@ -454,21 +560,32 @@ function DashboardScreen({
 }
 
 function PhotoDiagnosticPanel({ diagnostic }: { diagnostic: string }) {
+  return <DiagnosticPanel diagnostic={diagnostic} title="Photo diagnostics" />;
+}
+
+function DiagnosticPanel({ diagnostic, title, onClear }: { diagnostic: string; title: string; onClear?: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="rounded-lg border border-amber-300 bg-amber-50 p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-black uppercase text-amber-900">Photo diagnostics</h2>
-        <button
-          className="rounded-md bg-slate-950 px-3 py-2 text-xs font-black text-white"
-          onClick={async () => {
-            await navigator.clipboard?.writeText(diagnostic);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
-        >
-          {copied ? 'Copied' : 'Copy'}
-        </button>
+        <h2 className="text-sm font-black uppercase text-amber-900">{title}</h2>
+        <div className="flex gap-2">
+          {onClear && (
+            <button className="rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-black text-amber-950" onClick={onClear}>
+              Clear
+            </button>
+          )}
+          <button
+            className="rounded-md bg-slate-950 px-3 py-2 text-xs font-black text-white"
+            onClick={async () => {
+              const didCopy = await copyText(diagnostic);
+              setCopied(didCopy);
+              setTimeout(() => setCopied(false), 1200);
+            }}
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
       </div>
       <textarea className="h-52 w-full rounded-md border border-amber-200 bg-white p-2 font-mono text-xs" readOnly value={diagnostic} />
     </div>
@@ -993,6 +1110,183 @@ function statusClass(status: BrickCheckItem['status']) {
   if (status === 'partial') return 'bg-amber-100 text-amber-800';
   if (status === 'unsure') return 'bg-sky-100 text-sky-800';
   return 'bg-slate-100 text-slate-700';
+}
+
+function createImportDiagnostic({
+  file,
+  outcome,
+  progress,
+  error,
+  extra
+}: {
+  file: File;
+  outcome: string;
+  progress: ImportProgress;
+  error?: unknown;
+  extra?: Record<string, unknown>;
+}) {
+  const navigatorDetails = navigator as Navigator & {
+    standalone?: boolean;
+    userAgentData?: {
+      mobile?: boolean;
+      platform?: string;
+      brands?: Array<{ brand: string; version: string }>;
+    };
+  };
+  const errorDetails = describeError(error);
+  const nodeListIterator = typeof NodeList !== 'undefined' && typeof NodeList.prototype[Symbol.iterator] === 'function';
+  const typedArrayAt = typeof Uint8Array.prototype.at === 'function';
+  const fileArrayBuffer = typeof (File.prototype as File & { arrayBuffer?: unknown }).arrayBuffer === 'function';
+  const blobArrayBuffer = typeof (Blob.prototype as Blob & { arrayBuffer?: unknown }).arrayBuffer === 'function';
+
+  return {
+    timestamp: new Date().toISOString(),
+    app: {
+      name: 'BrickCheck',
+      version: '0.1.0',
+      mode: import.meta.env.MODE,
+      baseUrl: import.meta.env.BASE_URL,
+      pageUrl: window.location.href
+    },
+    outcome,
+    progress,
+    file: {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified,
+      lastModifiedIso: Number.isFinite(file.lastModified) ? new Date(file.lastModified).toISOString() : null
+    },
+    browser: {
+      userAgent: navigator.userAgent,
+      vendor: navigator.vendor,
+      platform: navigator.platform,
+      language: navigator.language,
+      languages: Array.from(navigator.languages ?? []),
+      maxTouchPoints: navigator.maxTouchPoints,
+      online: navigator.onLine,
+      standalone: Boolean(navigatorDetails.standalone),
+      userAgentData: navigatorDetails.userAgentData ?? null,
+      secureContext: window.isSecureContext,
+      visibilityState: document.visibilityState,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio
+      },
+      screen: {
+        width: window.screen.width,
+        height: window.screen.height,
+        availableWidth: window.screen.availWidth,
+        availableHeight: window.screen.availHeight
+      }
+    },
+    capabilities: {
+      fileReader: typeof FileReader === 'function',
+      fileArrayBuffer,
+      blobArrayBuffer,
+      promiseWithResolvers: 'withResolvers' in Promise,
+      structuredClone: typeof globalThis.structuredClone === 'function',
+      arrayAt: typeof Array.prototype.at === 'function',
+      arrayFindLast: typeof Array.prototype.findLast === 'function',
+      typedArrayAt,
+      arrayIterator: typeof Array.prototype[Symbol.iterator] === 'function',
+      nodeListIterator,
+      mapGetOrInsert: typeof Map.prototype.getOrInsert === 'function',
+      mapGetOrInsertComputed: typeof Map.prototype.getOrInsertComputed === 'function',
+      mathSumPrecise: typeof Math.sumPrecise === 'function',
+      worker: typeof Worker === 'function',
+      offscreenCanvas: typeof OffscreenCanvas === 'function',
+      canvasToBlob: typeof HTMLCanvasElement.prototype.toBlob === 'function',
+      indexedDb: typeof indexedDB !== 'undefined',
+      serviceWorker: 'serviceWorker' in navigator,
+      storagePersist: typeof navigator.storage?.persist === 'function',
+      pdfWorkerModuleLoaded: Boolean((globalThis as typeof globalThis & { pdfjsWorker?: unknown }).pdfjsWorker)
+    },
+    error: errorDetails,
+    ...extra
+  };
+}
+
+function describeError(error: unknown) {
+  if (error === undefined) return null;
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack ?? null,
+      cause: error.cause === undefined ? null : safeDiagnosticValue(error.cause),
+      stringValue: String(error)
+    };
+  }
+  if (typeof error === 'object' && error !== null) {
+    const errorRecord = error as Record<string, unknown>;
+    return {
+      name: typeof errorRecord.name === 'string' ? errorRecord.name : null,
+      message: typeof errorRecord.message === 'string' ? errorRecord.message : null,
+      stack: typeof errorRecord.stack === 'string' ? errorRecord.stack : null,
+      value: safeDiagnosticValue(error)
+    };
+  }
+  return { value: String(error) };
+}
+
+function safeDiagnosticValue(value: unknown): unknown {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function persistImportDiagnostic(setDiagnostic: (diagnostic: string) => void, diagnostic: unknown) {
+  const text = JSON.stringify(diagnostic, null, 2);
+  setDiagnostic(text);
+  try {
+    localStorage.setItem(IMPORT_DIAGNOSTIC_KEY, text);
+  } catch {
+    // The on-screen diagnostic remains available if storage is unavailable.
+  }
+}
+
+function loadImportDiagnostic(): string {
+  try {
+    return localStorage.getItem(IMPORT_DIAGNOSTIC_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function clearImportDiagnostic(setDiagnostic: (diagnostic: string) => void) {
+  setDiagnostic('');
+  try {
+    localStorage.removeItem(IMPORT_DIAGNOSTIC_KEY);
+  } catch {
+    // Clearing the visible diagnostic is still useful if storage is unavailable.
+  }
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall back to the older copy command below.
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  return copied;
 }
 
 function loadSettings(): ScoringSettings {

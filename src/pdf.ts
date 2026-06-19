@@ -31,9 +31,11 @@ export interface ThumbnailExtractionDiagnostics {
 }
 
 export async function parsePdfFile(file: File, onProgress?: ImportProgressCallback) {
-  onProgress?.({ phase: 'loading', current: 0, total: 1, message: 'Loading PDF' });
+  onProgress?.({ phase: 'loading', current: 0, total: 3, message: 'Reading PDF bytes' });
   const buffer = await readFileAsArrayBuffer(file);
+  onProgress?.({ phase: 'loading', current: 1, total: 3, message: 'Opening PDF engine' });
   const pdfDocument = await getPdfDocument(buffer);
+  onProgress?.({ phase: 'loading', current: 3, total: 3, message: `Opened PDF with ${pdfDocument.numPages} pages` });
   const runs: PdfTextRun[] = [];
   let orderIndex = 0;
 
