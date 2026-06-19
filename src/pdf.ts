@@ -4,6 +4,7 @@ import workerSrc from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import type { BrickCheckItem } from './types';
 import type { PdfTextRun } from './parser';
 import { parseOrderFromTextRuns } from './parser';
+import { getTextContentWithoutAsyncIteration } from './pdfTextContent';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
@@ -42,7 +43,7 @@ export async function parsePdfFile(file: File, onProgress?: ImportProgressCallba
   for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
     onProgress?.({ phase: 'text', current: pageNumber - 1, total: pdfDocument.numPages, message: `Reading page ${pageNumber} of ${pdfDocument.numPages}` });
     const page = await pdfDocument.getPage(pageNumber);
-    const content = await page.getTextContent();
+    const content = await getTextContentWithoutAsyncIteration(page);
     for (const item of content.items) {
       if (!isTextItem(item) || !item.str.trim()) continue;
       const [, , , fontHeight, x, y] = item.transform;
