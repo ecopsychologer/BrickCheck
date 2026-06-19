@@ -226,7 +226,7 @@ export default function App() {
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
           <button className="text-left" onClick={() => setScreen('home')}>
             <div className="text-2xl font-black tracking-normal">BrickCheck</div>
-            <div className="text-xs font-semibold uppercase tracking-normal text-slate-800">Local Pick a Brick verifier</div>
+            <div className="text-xs font-semibold uppercase tracking-normal text-slate-800">Pick a Brick Order Checking Helper</div>
           </button>
           <nav className="flex gap-2">
             {selectedOrder && (
